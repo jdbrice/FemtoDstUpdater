@@ -1,5 +1,0 @@
-#ifndef FEMTO_EVENT_WRITER_H
-#define FEMTO_EVENT_WRITER_H
-
-
-#endif
