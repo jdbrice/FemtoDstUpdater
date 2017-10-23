@@ -5,6 +5,7 @@
 #include "FemtoDstFormat/BranchReader.h"
 #include "FemtoDstFormat/TClonesArrayReader.h"
 
+#include "ChainLoader.h"
 
 #include "TFile.h"
 #include "TTree.h"
@@ -15,100 +16,158 @@
 #include "FemtoDstFormat/FemtoTrackHelix.h"
 #include "FemtoDstFormat/FemtoTrack.h"
 #include "FemtoDstFormat/FemtoBTofPidTraits.h"
+#include "FemtoDstFormat/FemtoMtdPidTraits.h"
+
+
+#include "CandidateDstFormat/CandidateEvent.h"
+#include "CandidateDstFormat/CandidateTrack.h"
+#include "CandidateDstFormat/CandidateTrackMtdPidTraits.h"
+
 
 #define LOGURU_IMPLEMENTATION 1
 #include "loguru.h"
+
+using namespace jdb;
+
+
+void copy_event( CandidateEvent * ein, FemtoEvent * eout ){
+
+	eout->mPrimaryVertex_mX1 = ein->mPrimaryVertex_mX1;
+	eout->mPrimaryVertex_mX2 = ein->mPrimaryVertex_mX2;
+	eout->mPrimaryVertex_mX3 = ein->mPrimaryVertex_mX3;
+	eout->mWeight            = ein->mWeight           ;
+	eout->mRunId             = ein->mRunId            ;
+	eout->mEventId           = ein->mEventId          ;
+	eout->mTriggerWord       = ein->mTriggerWord      ;
+	eout->mTriggerWordMtd    = ein->mTriggerWordMtd   ;
+	eout->mGRefMult          = ein->mGRefMult         ;
+	eout->mPsi2              = ein->mPsi2             ;
+	eout->mBin16             = ein->mBin16            ;
+	eout->mRunIndex          = ein->mRunIndex         ;
+}
+
+void copy_track( CandidateTrack *trackin, FemtoTrack *trackout ){
+	trackout->mPt                 = trackin->pMomentum().Pt();
+	trackout->mEta                = trackin->pMomentum().Eta();
+	trackout->mPhi                = trackin->pMomentum().Phi();
+	trackout->mId                 = trackin->mId             ;
+	trackout->mDedx               = trackin->mDedx           ;
+	trackout->mNHitsFit           = trackin->mNHitsFit       ;
+	trackout->mNHitsMax           = trackin->mNHitsMax       ;
+	trackout->mNHitsDedx          = trackin->mNHitsDedx      ;
+	trackout->mNSigmaPion         = trackin->mNSigmaPion     ;
+	trackout->mNSigmaKaon         = trackin->mNSigmaKaon     ;
+	trackout->mNSigmaProton       = trackin->mNSigmaProton   ;
+	trackout->mNSigmaElectron     = trackin->mNSigmaElectron ;
+	trackout->mDCA                = trackin->mDCA            ;
+	
+	// pidTraits
+	trackout->mBTofPidTraitsIndex = trackin->mBTofPidTraitsIndex;
+	trackout->mMtdPidTraitsIndex  = trackin->mMtdPidTraitsIndex;
+	trackout->mEmcPidTraitsIndex  = -1;
+	trackout->mHelixIndex         = trackin->mHelixIndex;
+	trackout->mMcIndex            = -1;
+}
+
+
+void copy_mtdpid( CandidateTrackMtdPidTraits * mtdpidin, FemtoMtdPidTraits * mtdpidout ){
+	mtdpidout->mDeltaY            = mtdpidin->mDeltaY            ;
+	mtdpidout->mDeltaZ            = mtdpidin->mDeltaZ            ;
+	mtdpidout->mDeltaTimeOfFlight = mtdpidin->mDeltaTimeOfFlight ;
+	mtdpidout->mMatchFlag         = mtdpidin->mMatchFlag         ;
+	mtdpidout->mMtdHitChan        = mtdpidin->mMtdHitChan        ;
+	mtdpidout->mTriggerFlag       = mtdpidin->mTriggerFlag       ;
+	mtdpidout->mIdTruth           = -1;
+}
 
 
 int main( int argc, char* argv[] ){
 	
 	loguru::init(argc, argv);
 
-	TFile *f = new TFile( "FemtoDst.root", "RECREATE" );
+	TChain *chain = new TChain( "FemtoDst" );
+	ChainLoader::loadList( chain, "./list.lis" );
+
+	size_t totalEvents = chain->GetEntries();
+	cout << "# Entries = " << totalEvents << endl;
+
+
+	BranchReader<CandidateEvent> cer;
+	TClonesArrayReader<CandidateTrack> ctr;
+	TClonesArrayReader<CandidateTrackMtdPidTraits> cmtd;
+	CandidateEvent * cevent = nullptr;
+	CandidateTrack * ctrack = nullptr;
+	CandidateTrackMtdPidTraits * cmtdpid = nullptr;
+
+	cer.setup( chain, "Event" );
+	ctr.setup( chain, "Tracks" );
+	cmtd.setup( chain, "MtdPidTraits" );
+
+	TFile *f = new TFile("FemtoDst.root", "RECREATE" );
+	f->cd();
+
+	BranchWriter<FemtoEvent> few;
+	TClonesArrayWriter<FemtoTrack> ftw;
+	TClonesArrayWriter<FemtoMtdPidTraits> fmtdw;
+	
 	TTree *tree = new TTree( "FemtoDst", "FemtoDst of STAR standard data format" );
-
-	gRandom = new TRandom3();
-	gRandom->SetSeed( 1 );
-
-	FemtoBranchWriter<FemtoEvent> few;
 	few.createBranch( tree, "Event" );
-
-	// FemtoTracksWriter ftw;
-	FemtoTClonesArrayWriter<FemtoTrack> ftw;
 	ftw.createBranch( tree, "Tracks" );
-
-	FemtoTClonesArrayWriter<FemtoTrackHelix> fthw;
-	fthw.createBranch( tree, "TrackHelices" );
-
-	FemtoTClonesArrayWriter<FemtoBTofPidTraits> fbtofw;
-	fbtofw.createBranch( tree, "BTofPidTraits" );
-
-
+	fmtdw.createBranch( tree, "MtdPidTraits" );
+	
 	FemtoEvent event;
 	FemtoTrack track;
-	FemtoTrackHelix tHelix;
-	FemtoBTofPidTraits btof;
-	for ( int i = 0; i < 10000; i++ ){
-		event.mPrimaryVertex_mX1 = gRandom->Gaus( 0, 1);
-		event.mPrimaryVertex_mX2 = gRandom->Gaus( 0, 1);
-		event.mPrimaryVertex_mX3 = gRandom->Gaus( 0, 100);
+	FemtoMtdPidTraits mtdpid;
+
+	size_t iEvent = 0;
+	while (true){ // what could go wrong 
+		Long64_t read = chain->GetEntry(iEvent);
+		iEvent++;
+		if ( read <= 0 )
+			break;
+		if ( iEvent >= totalEvents )
+			break;
+
+		if ( iEvent % 100000 == 0 ){
+			float progress = (iEvent / (float)totalEvents) * 100;
+			cout << "\r" << iEvent << " of " << totalEvents << " : " << setprecision(2) << progress << "%" << std::flush;	
+		}
+		
+		
+		
+		ftw.reset();
+		fmtdw.reset();
+
+		track.reset();
+		mtdpid.reset();
+
+
+		cevent = cer.get();
+		copy_event( cevent, &event );
 		few.set( event );
 
-		ftw.reset();
-		fthw.reset();
-		fbtofw.reset();
-		// make some tracks
-		for ( int j = 0; j < 100; j++ ){
-			track.reset();
-			track.pMomentum( gRandom->Uniform( -1, 1 ), gRandom->Uniform( -1, 1 ), gRandom->Uniform( -1, 1 ) );
+		size_t nTracks = ctr.N();
 
-			track.gDCA( gRandom->Gaus( 1.0, 3.0 ) );
+		for ( size_t i = 0; i < nTracks; i++ ){
+			ctrack = ctr.get( i );
+			copy_track( ctrack, &track );
 
-			tHelix.mMap0 = 1221434;
+			if ( ctrack->mMtdPidTraitsIndex >= 0 ){
+				cmtdpid = cmtd.get( ctrack->mMtdPidTraitsIndex );
+				copy_mtdpid( cmtdpid, &mtdpid );
+				fmtdw.add( mtdpid );
+			}
+			else 
+				cmtdpid = nullptr;
 
-			btof.mBTofMatchFlag=2;
-			btof.yLocal(gRandom->Uniform( -3.0, 3.0 ));
-			btof.zLocal(gRandom->Uniform( -3.0, 3.0 ));
 
-			track.mHelixIndex = fthw.N();
-			track.mBTofPidTraitsIndex = fbtofw.N();
-
-			fbtofw.add( btof );
-			fthw.add( tHelix );
 			ftw.add( track );
+
 		}
 
-		tree->Fill();
+		tree->Fill();	
 	}
-	
 
 	f->Write();
-	f->Close();
-	delete f;
-	
-
-
-	FemtoBranchReader<FemtoEvent> fer;
-	FemtoTClonesArrayReader<FemtoTrack> ftr;
-	f = new TFile( "FemtoDst.root", "READ" );
-	tree = (TTree*)f->Get( "FemtoDst" );
-	fer.setup( tree, "Event" );
-	ftr.setup( tree, "Tracks" );
-	for ( int i = 0; i < tree->GetEntries(); i++ ){
-		tree->GetEntry(i);
-
-		LOG_F( INFO, "vZ=%f", fer.get()->mPrimaryVertex_mX3 );
-		UInt_t nTracks = ftr.N();
-		for ( int j = 0; j < nTracks; j++ ){
-			LOG_F( INFO, "Track[%d].gDCA() = %f", j, ftr.get(j)->gDCA() );
-		}
-	}
-	
-
-
-	f->Close();
-
-
-
 	return 0;
 }
